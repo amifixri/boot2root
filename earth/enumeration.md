@@ -130,6 +130,8 @@ Mencari direktori dan file tersembunyi.
 gobuster dir \
 -u http://earth.local \
 -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+atau
+-w  /usr/share/wordlists/dirbuster/common.txt
 ```
 
 #### Hasil
